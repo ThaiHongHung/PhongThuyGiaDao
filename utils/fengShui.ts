@@ -1,12 +1,10 @@
-import { BatQuai, NguHanh, Gender, FengShuiAnalysis, BaguaDirection, StarQuality, Point, KitchenAnalysis, FeatureAnalysis } from '../types';
+import { BatQuai, NguHanh, Gender, FengShuiAnalysis, BaguaDirection, StarQuality, Point, KitchenAnalysis, FeatureAnalysis, AltarAnalysis } from '../types';
 import { KUA_MAP, STAR_DEFINITIONS, DIRECTIONS_ORDER } from '../constants';
 
 /**
  * Calculates the Kua Number (Mệnh Quái) based on Lunar Birth Year and Gender.
- * Uses the Sum of Digits method valid for 1900-2099.
  */
 export const calculateKuaNumber = (birthYear: number, gender: Gender): number => {
-  // 1. Sum all digits of the year until single digit
   let sum = birthYear;
   while (sum > 9) {
       let temp = sum;
@@ -17,9 +15,6 @@ export const calculateKuaNumber = (birthYear: number, gender: Gender): number =>
       }
   }
   
-  // 2. Apply formula for 1900-2099
-  // Male: 11 - n
-  // Female: n + 4
   let kua = 0;
   if (gender === Gender.MALE) {
       kua = 11 - sum;
@@ -27,7 +22,6 @@ export const calculateKuaNumber = (birthYear: number, gender: Gender): number =>
       kua = sum + 4;
   }
 
-  // 3. Reduce to single digit again
   while (kua > 9) {
       let temp = kua;
       kua = 0;
@@ -37,11 +31,9 @@ export const calculateKuaNumber = (birthYear: number, gender: Gender): number =>
       }
   }
 
-  // 4. Handle Special Case for Kua 5
   if (kua === 5) {
       return gender === Gender.MALE ? 2 : 8;
   }
-  // Handle 0 edge case (should not happen with valid math but for safety)
   if (kua === 0) return 9; 
 
   return kua;
@@ -62,12 +54,9 @@ export const getBatQuaiInfo = (kua: number): { name: BatQuai; element: NguHanh; 
 };
 
 /**
- * Calculates the Compass Bearing from Center to a Point on the canvas.
- * Assumes 'Up' on the canvas corresponds to North (0 degrees) by default.
+ * Calculates Bearing from Center to Target.
  */
 export const calculateBearing = (center: Point, target: Point, houseFacingDegree: number, imageWidth: number, imageHeight: number, compassOffset: number = 0): number => {
-  // Convert Percentage points to pixels (relative concept) to get angle
-  // Note: Y is down in screen coordinates.
   const cx = center.x * imageWidth;
   const cy = center.y * imageHeight;
   const tx = target.x * imageWidth;
@@ -76,30 +65,17 @@ export const calculateBearing = (center: Point, target: Point, houseFacingDegree
   const dx = tx - cx;
   const dy = ty - cy;
 
-  // Calculate angle in radians relative to screen positive X axis (Right is 0, Down is 90)
   const angleRad = Math.atan2(dy, dx);
   let angleDeg = angleRad * (180 / Math.PI);
 
-  // Convert to Compass Bearing relative to Screen Up (0 deg)
-  // Math: 0 is Right (East on Screen). 
-  // Compass: 0 is Up (North on Screen).
-  // Screen Up is -90 Math deg.
-  // Formula used: Bearing = angleDeg + 90.
   let bearingRelativeToUp = angleDeg + 90;
-  
-  // Normalize
   bearingRelativeToUp = (bearingRelativeToUp + 360) % 360;
 
-  // Now adjust for Total Compass Rotation (compassOffset includes Image Rotation + Manual Offset).
-  // Since visual "Up" is North (0), any point's angle relative to Up IS its Compass Azimuth.
-  // Unless the Grid is rotated.
-  // If Grid rotates CW (positive offset), the point effectively moves CCW relative to the Grid.
   let trueBearing = (bearingRelativeToUp - compassOffset + 360) % 360;
   return trueBearing;
 };
 
 export const getSectorByDegree = (degree: number, kua: number) => {
-  // Normalize degree
   let d = degree % 360;
   if (d < 0) d += 360;
 
@@ -112,62 +88,177 @@ export const getSectorByDegree = (degree: number, kua: number) => {
   };
 };
 
+// --- Geometric Helpers ---
+const getDistance = (p1: Point, p2: Point) => {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+};
+
+const getAngleBetweenPoints = (source: Point, target: Point, compassOffset: number): number => {
+    const dy = target.y - source.y;
+    const dx = target.x - source.x;
+    let theta = Math.atan2(dy, dx) * (180 / Math.PI); 
+    let bearing = theta + 90; 
+    bearing = (bearing + 360) % 360;
+    return (bearing - compassOffset + 360) % 360;
+};
+
+// Check if source point is facing the target point
+// Tightened tolerance to 15 degrees to be more precise
+const isFacingTarget = (source: Point, sourceFacingDegree: number, target: Point, compassOffset: number, tolerance: number = 15): boolean => {
+    const angleToTarget = getAngleBetweenPoints(source, target, compassOffset);
+    const diff = Math.abs(angleToTarget - sourceFacingDegree);
+    return diff < tolerance || diff > (360 - tolerance);
+};
+
+// Check if a point is in the "Center Palace" (Trung Cung) - approx inner 20% radius
+const isPointInCenter = (p: Point, center: Point): boolean => {
+    return getDistance(p, center) < 0.12; 
+};
+
+// --- Analyzers ---
+
 export const analyzeKitchen = (
   kua: number, 
   houseFacing: number, 
   center: Point, 
   kitchen: Point, 
   stoveFacing: number,
-  imgW: number = 1000, 
-  imgH: number = 1000,
-  compassOffset: number = 0
+  imgW: number, 
+  imgH: number,
+  compassOffset: number,
+  toilets: Point[] = [],
+  wcDoors: Point[] = []
 ): KitchenAnalysis => {
   const locationDegree = calculateBearing(center, kitchen, houseFacing, imgW, imgH, compassOffset);
   const locSector = getSectorByDegree(locationDegree, kua);
-  
-  // Note: stoveFacing is already an absolute compass value input by user, no need to offset
   const faceSector = getSectorByDegree(stoveFacing, kua);
 
-  const isSittingBad = !locSector.star.good; // Desired
-  const isFacingGood = faceSector.star.good; // Desired
+  // Expert Logic: Tọa Hung - Hướng Cát
+  const isSittingBad = !locSector.star.good; // Desired: Sit on Bad sector
+  const isFacingGood = faceSector.star.good; // Desired: Face Good sector
 
   const advice: string[] = [];
   let score = 50; 
 
+  // 1. Tọa (Vị trí)
   if (isSittingBad) {
     score += 25;
-    advice.push(`✅ Bếp đặt tại cung ${locSector.direction} (${locSector.star.name}) là "Tọa Hung". Bếp thuộc Hỏa sẽ thiêu đốt điều xấu của cung này. Rất tốt!`);
+    advice.push(`✅ TỌA ĐÚNG: Bếp đặt tại ${locSector.direction} (${locSector.star.name} - Hung). Vì Bếp mang tính Hỏa, đặt ở cung Hung sẽ đốt cháy điều xấu.`);
   } else {
     score -= 25;
-    advice.push(`⚠️ Cảnh báo: Bếp đặt tại cung ${locSector.direction} (${locSector.star.name}) là "Tọa Cát". Bếp lửa sẽ thiêu đốt cát khí của gia chủ.`);
+    advice.push(`⚠️ TỌA SAI: Bếp đang đặt tại ${locSector.direction} (${locSector.star.name} - Cát).`);
+    advice.push(`Lý do: Đặt bếp (Hỏa) ở cung tốt sẽ thiêu rụi tài lộc và may mắn của cung ${locSector.star.name}. Bếp nên dời về cung xấu.`);
   }
 
+  // 2. Hướng (Miệng lò)
   if (isFacingGood) {
     score += 25;
-    advice.push(`✅ Bếp hướng về ${faceSector.direction} (${faceSector.star.name}) là "Hướng Cát". Đón luồng khí tốt vào nhà.`);
+    advice.push(`✅ HƯỚNG ĐÚNG: Miệng bếp nhìn về ${faceSector.direction} (${faceSector.star.name} - Cát). Giúp nạp sinh khí, nuôi dưỡng gia đạo.`);
   } else {
     score -= 25;
-    advice.push(`⚠️ Cảnh báo: Bếp hướng về ${faceSector.direction} (${faceSector.star.name}) là "Hướng Hung". Gây bất lợi cho gia đạo.`);
+    advice.push(`⚠️ HƯỚNG SAI: Miệng bếp đang nhìn về ${faceSector.direction} (${faceSector.star.name} - Hung).`);
+    advice.push(`Lý do: Hướng bếp nạp khí xấu (${faceSector.star.name}) vào thức ăn, gây ảnh hưởng sức khỏe và tài vận.`);
   }
 
-  if (!isSittingBad) advice.push("Hóa giải Tọa Cát: Giữ bếp luôn sạch sẽ, gọn gàng. Treo hồ lô gỗ gần bếp để chuyển hóa xung khắc.");
-  if (!isFacingGood) advice.push("Hóa giải Hướng Hung: Nếu không thể xoay bếp, hãy sử dụng màu sắc thảm chùi chân tại cửa bếp tương sinh với mệnh gia chủ.");
-  advice.push("Lưu ý: Không đặt bếp nấu quá gần bồn rửa (Thủy khắc Hỏa). Khoảng cách tối thiểu nên là 60cm.");
+  // 3. Trung Cung Check
+  if (isPointInCenter(kitchen, center)) {
+      score -= 50;
+      advice.push("🚫 ĐẠI KỴ: Bếp đặt tại Trung Cung (Giữa nhà). Hỏa thiêu tâm nhà, gia đạo bất ổn, người trong nhà nóng nảy, bệnh tim mạch.");
+  }
+
+  // 4. Thủy Hỏa Xung (Toilet interaction)
+  // Use WC Doors if available, otherwise fallback to Toilet center points
+  const wcCheckPoints = wcDoors.length > 0 ? wcDoors : toilets;
+  
+  if (wcCheckPoints.length > 0) {
+      let isFacingWC = false;
+      
+      wcCheckPoints.forEach((wc) => {
+          // Check alignment
+          // Distance check: If WC is too far (> 40% of image width away), ignore logical clash in simple 2D view to avoid false positives across large houses
+          const dist = getDistance(kitchen, wc);
+          if (dist < 0.4 && isFacingTarget(kitchen, stoveFacing, wc, compassOffset)) {
+              isFacingWC = true;
+          }
+      });
+
+      if (isFacingWC) {
+          score -= 30;
+          advice.push("🚫 THỦY HỎA XUNG: Hướng miệng bếp chiếu thẳng vào Cửa WC.");
+          advice.push("Tác hại: Uế khí từ WC xộc thẳng vào bếp. Gây bệnh đường tiêu hóa, hao tài tốn của.");
+          advice.push("👉 Hóa giải: Luôn đóng cửa WC, treo rèm hạt gỗ, hoặc đổi hướng bếp.");
+      }
+  }
+
+  advice.push("💡 Lưu ý: Tránh đặt bếp ngay dưới xà ngang (áp khí). Bếp và bồn rửa không được sát nhau (Thủy khắc Hỏa), cách tối thiểu 60cm.");
 
   return {
-    locationSector: {
-      direction: locSector.direction,
-      star: locSector.star,
-      isSittingBad
-    },
-    facingSector: {
-      direction: faceSector.direction,
-      star: faceSector.star,
-      isFacingGood
-    },
+    locationSector: { direction: locSector.direction, star: locSector.star, isSittingBad },
+    facingSector: { direction: faceSector.direction, star: faceSector.star, isFacingGood },
     score,
     advice
   };
+};
+
+export const analyzeAltar = (
+  kua: number,
+  houseFacing: number,
+  center: Point,
+  altar: Point,
+  altarFacing: number,
+  imgW: number,
+  imgH: number,
+  compassOffset: number,
+  toilets: Point[] = []
+): AltarAnalysis => {
+    const locationDegree = calculateBearing(center, altar, houseFacing, imgW, imgH, compassOffset);
+    const locSector = getSectorByDegree(locationDegree, kua);
+    const faceSector = getSectorByDegree(altarFacing, kua);
+
+    const isSittingGood = locSector.star.good; // Desired
+    const isFacingGood = faceSector.star.good; // Desired
+
+    const advice: string[] = [];
+    let score = 0;
+
+    // Tọa Cát
+    if (isSittingGood) {
+        score += 50;
+        advice.push(`✅ TỐT: Ban thờ tọa tại ${locSector.direction} (${locSector.star.name} - Cát). Vị trí trang nghiêm, tụ linh khí.`);
+    } else {
+        score -= 20;
+        advice.push(`⚠️ XẤU: Ban thờ tọa tại ${locSector.direction} (${locSector.star.name} - Hung). Cần đặt vật phẩm hóa giải (hồ lô, tỳ hưu).`);
+    }
+
+    // Hướng Cát
+    if (isFacingGood) {
+        score += 50;
+        advice.push(`✅ TỐT: Ban thờ nhìn về ${faceSector.direction} (${faceSector.star.name} - Cát). Đón phúc lộc.`);
+    } else {
+        score -= 20;
+        advice.push(`⚠️ XẤU: Ban thờ nhìn về ${faceSector.direction} (${faceSector.star.name} - Hung).`);
+    }
+
+    // Geometric Checks
+    let nearWC = false;
+    toilets.forEach(wc => {
+        if (getDistance(altar, wc) < 0.12) nearWC = true;
+    });
+    if (nearWC) {
+        score -= 40;
+        advice.push("🚫 PHẠM KỴ: Ban thờ đặt sát hoặc tựa lưng vào WC. Uế khí xâm phạm sự tôn nghiêm. Gia đạo lục đục, sức khỏe kém.");
+    }
+    
+    if (isPointInCenter(altar, center)) {
+        advice.push("⚠️ Lưu ý: Ban thờ đặt giữa nhà (Trung Cung) cần đảm bảo không bị động khí (lối đi lại quá nhiều).");
+    }
+
+    return {
+        locationSector: { direction: locSector.direction, star: locSector.star, isSittingBad: !isSittingGood },
+        facingSector: { direction: faceSector.direction, star: faceSector.star, isFacingGood },
+        score,
+        advice
+    };
 };
 
 export const analyzeFeature = (
@@ -177,8 +268,10 @@ export const analyzeFeature = (
     target: Point, 
     imgW: number, 
     imgH: number,
-    featureType: 'DOOR' | 'TOILET' | 'STAIRS',
-    compassOffset: number = 0
+    featureType: 'DOOR' | 'TOILET' | 'STAIRS' | 'BEDROOM',
+    labelSuffix: string = '',
+    compassOffset: number = 0,
+    spatialContext: { toilets?: Point[], wcDoors?: Point[], door?: Point, kitchen?: Point, featureFacing?: number } = {}
 ): FeatureAnalysis => {
     const degree = calculateBearing(center, target, houseFacing, imgW, imgH, compassOffset);
     const sector = getSectorByDegree(degree, kua);
@@ -188,41 +281,117 @@ export const analyzeFeature = (
     const advice: string[] = [];
     
     if (featureType === 'DOOR') {
-        // Door should be in Good Sector
         isGoodPlacement = sector.star.good;
         if (isGoodPlacement) {
-            score = 20;
-            advice.push(`✅ Cửa chính tại cung ${sector.direction} (${sector.star.name}) là Cát. Đón sinh khí vào nhà.`);
+            score = 30;
+            advice.push(`✅ Cửa chính nạp khí tại cung ${sector.direction} (${sector.star.name} - Cát). Đại lợi cho tài vận.`);
         } else {
-            score = -20;
-            advice.push(`⚠️ Cửa chính tại cung ${sector.direction} (${sector.star.name}) là Hung. Dễ gặp trắc trở.`);
-            advice.push("Hóa giải: Dùng vật phẩm phong thủy trấn trạch hoặc màu thảm tương sinh để cản bớt sát khí.");
+            score = -30;
+            advice.push(`⚠️ Cửa chính tại cung ${sector.direction} (${sector.star.name} - Hung). Nạp sát khí vào nhà.`);
+            advice.push("👉 Hóa giải: Dùng thảm màu tương sinh trước cửa, treo gương Bát Quái lồi hoặc trồng cây xanh cản sát khí.");
         }
-    } else if (featureType === 'TOILET') {
-        // Toilet should be in Bad Sector (suppress bad)
+        advice.push("📏 Thước Lỗ Ban: Kích thước thông thủy cửa chính cần rơi vào các cung tốt (Tài, Nghĩa, Quan, Bản) - khoảng 52.2cm đẹp nhất.");
+        advice.push("🚫 Kiểm tra Xuyên Tâm Sát: Nếu cửa chính thẳng hàng với cửa hậu hoặc cửa sổ lớn phía sau, tiền bạc đội nón ra đi. Cần đặt bình phong chắn.");
+        
+        // Check facing WC
+        // Prioritize WC Doors if marked, otherwise fallback to WC location
+        const wcCheckPoints = (spatialContext.wcDoors && spatialContext.wcDoors.length > 0) 
+                              ? spatialContext.wcDoors 
+                              : spatialContext.toilets;
+
+        if (wcCheckPoints) {
+            wcCheckPoints.forEach(wc => {
+                 // Check if Main Door is close/facing WC Door
+                 if (getDistance(target, wc) < 0.15) {
+                     advice.push("🚫 Cửa chính quá gần hoặc đối diện Cửa WC. Khách vào nhà thấy ngay WC là đại kỵ (Uế khí xung trực).");
+                 }
+            });
+        }
+    } 
+    else if (featureType === 'TOILET') {
+        // WC should be in BAD sector ("Lấy độc trị độc")
         isGoodPlacement = !sector.star.good;
         if (isGoodPlacement) {
-             score = 15;
-             advice.push(`✅ Nhà vệ sinh đặt tại ${sector.direction} (${sector.star.name}) là "Lấy độc trị độc". Giúp trấn áp điều xấu.`);
+             score = 20;
+             advice.push(`✅ ${labelSuffix} đặt tại ${sector.direction} (${sector.star.name} - Hung) là hợp lý ("Lấy độc trị độc"). Trấn áp phương xấu.`);
         } else {
-             score = -25; // Very bad to flush away good luck
-             advice.push(`❌ Đại kỵ: Nhà vệ sinh đặt tại ${sector.direction} (${sector.star.name}). Làm tiêu tan tài lộc/sức khỏe (Thủy cuốn trôi).`);
-             advice.push("Hóa giải: Giữ luôn khô ráo, đóng nắp bồn cầu, trồng cây xanh (Thủy sinh Mộc) để hút bớt nước.");
+             score = -30; 
+             advice.push(`❌ ĐẠI KỴ: ${labelSuffix} đặt tại ${sector.direction} (${sector.star.name} - Cát). Làm ô uế phương vị tốt, tiêu tan tài lộc.`);
         }
-    } else if (featureType === 'STAIRS') {
-        // Stairs roughly similar to Door (Active Qi) - Preferred in Good sectors
+        
+        if (isPointInCenter(target, center)) {
+             score -= 50;
+             advice.push("🚫 TUYỆT ĐỐI TRÁNH: WC đặt tại Trung Cung (Giữa nhà). Uế khí tỏa đi khắp nhà, bệnh tật triền miên.");
+        }
+    } 
+    else if (featureType === 'STAIRS') {
+        // Stairs mostly neutral but prefer Good sectors for start
         isGoodPlacement = sector.star.good;
+        
+        if (isPointInCenter(target, center)) {
+             score -= 30;
+             advice.push("⚠️ Cầu thang giữa nhà (Trung Cung) tạo thành cột xoáy khí, chia cắt không gian, không tốt cho tình cảm gia đình.");
+        }
+
+        // GEOMETRIC CHECK: Stairs facing Main Door
+        if (spatialContext.door && spatialContext.featureFacing !== undefined) {
+            // Widen tolerance to 35 degrees to ensure detecting "Lao Cầu Thang" more reliably
+            if (isFacingTarget(target, spatialContext.featureFacing, spatialContext.door, compassOffset, 35)) {
+                score -= 40;
+                advice.push("🚫 ĐẠI KỴ: Cầu thang đối diện cửa chính (Lao Cầu Thang)."); 
+                advice.push("Giải thích: Khí nạp vào từ cửa chính bị cầu thang cắt đứt hoặc xộc thẳng ra ngoài. Gây thoái tài, gia đạo bất an.");
+                advice.push("👉 Hóa giải: Đặt bình phong, rèm châu hoặc chậu cây lớn ở chân cầu thang để cản khí.");
+            }
+        }
+        advice.push("🔢 Số bậc cầu thang nên rơi vào cung 'Sinh' (công thức 4n+1): 17, 21, 25 bậc.");
+    }
+    else if (featureType === 'BEDROOM') {
+        isGoodPlacement = sector.star.good;
+        
+        // 1. Location
         if (isGoodPlacement) {
-            score = 10;
-            advice.push(`✅ Cầu thang tại ${sector.direction} (${sector.star.name}) giúp dẫn khí tốt lên các tầng.`);
+            score = 20;
+            advice.push(`✅ Vị trí ${labelSuffix} tại ${sector.direction} (${sector.star.name}) là tốt. Giúp ngủ ngon, an thần.`);
         } else {
             score = -10;
-            advice.push(`⚠️ Cầu thang tại ${sector.direction} (${sector.star.name}) là cung xấu. Có thể dẫn khí xấu lan tỏa.`);
+            advice.push(`⚠️ Vị trí ${labelSuffix} tại ${sector.direction} (${sector.star.name}) là cung xấu.`);
+        }
+
+        // 2. Facing (Bed Head)
+        if (spatialContext.featureFacing !== undefined) {
+             const faceSector = getSectorByDegree(spatialContext.featureFacing, kua);
+             if (faceSector.star.good) {
+                 score += 20;
+                 advice.push(`✅ Đầu giường quay về ${faceSector.direction} (${faceSector.star.name} - Cát). Nạp sinh khí khi ngủ.`);
+             } else {
+                 score -= 20;
+                 advice.push(`⚠️ Đầu giường quay về ${faceSector.direction} (${faceSector.star.name} - Hung). Dễ gặp ác mộng, sức khỏe giảm sút.`);
+             }
+        }
+        
+        // 3. Interactions
+        if (spatialContext.toilets && spatialContext.toilets.length > 0) {
+            spatialContext.toilets.forEach(wc => {
+                if (getDistance(target, wc) < 0.12) {
+                    score -= 20;
+                    advice.push("🚫 CẢNH BÁO: Đầu giường quá sát tường WC. Âm khí và tiếng ồn nước chảy gây bệnh thần kinh, đau đầu.");
+                }
+            });
+        }
+        
+        if (spatialContext.kitchen && getDistance(target, spatialContext.kitchen) < 0.15) {
+             advice.push("⚠️ Cẩn thận: Phòng ngủ sát bếp hoặc trên bếp. Hỏa khí gây nóng nảy, vợ chồng lục đục.");
         }
     }
 
+    let featureNameStr = '';
+    if (featureType === 'DOOR') featureNameStr = 'Cửa Chính';
+    else if (featureType === 'TOILET') featureNameStr = labelSuffix || 'Nhà Vệ Sinh';
+    else if (featureType === 'BEDROOM') featureNameStr = labelSuffix || 'Phòng Ngủ';
+    else featureNameStr = 'Cầu Thang';
+
     return {
-        featureName: featureType === 'DOOR' ? 'Cửa Chính' : featureType === 'TOILET' ? 'Nhà Vệ Sinh' : 'Cầu Thang',
+        featureName: featureNameStr,
         locationSector: sector,
         score,
         advice,
@@ -238,8 +407,14 @@ export const analyzeFengShui = (
       kitchen?: Point, 
       stoveFacing?: number,
       mainDoor?: Point,
-      toilet?: Point,
+      toilets?: Point[], 
+      wcDoors?: Point[], // New argument
+      bedrooms?: Point[], 
+      bedroomFacings?: number[], 
+      altar?: Point,      
+      altarFacing?: number, 
       stairs?: Point,
+      stairsFacing?: number, 
       width: number, 
       height: number,
       compassOffset?: number 
@@ -248,7 +423,6 @@ export const analyzeFengShui = (
   const menhInfo = getBatQuaiInfo(kua);
   const stars = KUA_MAP[kua];
   
-  // Create sectors
   const sectors = DIRECTIONS_ORDER.map((dir, index) => {
     const starQuality = stars[index];
     const starInfo = STAR_DEFINITIONS[starQuality];
@@ -266,7 +440,7 @@ export const analyzeFengShui = (
     };
   });
 
-  // Facing Quality
+  // Facing
   let normalizedFacing = facingDegree % 360;
   if (normalizedFacing < 0) normalizedFacing += 360;
   let facingSectorIndex = Math.round(normalizedFacing / 45) % 8;
@@ -274,40 +448,72 @@ export const analyzeFengShui = (
   const facingStar = STAR_DEFINITIONS[facingQuality];
 
   const advice: string[] = [];
-  
   if (facingStar.good) {
     advice.push(`Hướng nhà ${DIRECTIONS_ORDER[facingSectorIndex]} (${facingQuality}) là hướng tốt.`);
   } else {
     advice.push(`Hướng nhà ${DIRECTIONS_ORDER[facingSectorIndex]} (${facingQuality}) là hướng xấu. Cần hóa giải.`);
   }
 
-  let overallScore = facingStar.good ? 70 : 40; // Base score
+  let overallScore = facingStar.good ? 70 : 40; 
 
-  // Analyze Features
+  // Features
   let kitchenAnalysis: KitchenAnalysis | undefined;
   let mainDoorAnalysis: FeatureAnalysis | undefined;
-  let toiletAnalysis: FeatureAnalysis | undefined;
+  let toiletAnalyses: FeatureAnalysis[] = []; 
+  let bedroomAnalyses: FeatureAnalysis[] = []; 
+  let altarAnalysis: AltarAnalysis | undefined; 
   let stairsAnalysis: FeatureAnalysis | undefined;
 
   const compassOffset = spatialData?.compassOffset || 0;
 
   if (spatialData) {
+      // 1. Kitchen
       if (spatialData.kitchen && spatialData.stoveFacing !== undefined) {
           kitchenAnalysis = analyzeKitchen(
-              kua, facingDegree, spatialData.center, spatialData.kitchen, spatialData.stoveFacing, spatialData.width, spatialData.height, compassOffset
+              kua, facingDegree, spatialData.center, spatialData.kitchen, spatialData.stoveFacing, spatialData.width, spatialData.height, compassOffset, spatialData.toilets, spatialData.wcDoors
           );
           if (kitchenAnalysis.score > 50) overallScore += 10; else overallScore -= 10;
       }
+      
+      // 2. Door
       if (spatialData.mainDoor) {
-          mainDoorAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, spatialData.mainDoor, spatialData.width, spatialData.height, 'DOOR', compassOffset);
+          mainDoorAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, spatialData.mainDoor, spatialData.width, spatialData.height, 'DOOR', '', compassOffset, { toilets: spatialData.toilets, wcDoors: spatialData.wcDoors });
           if (mainDoorAnalysis.isGoodPlacement) overallScore += 10; else overallScore -= 10;
       }
-      if (spatialData.toilet) {
-          toiletAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, spatialData.toilet, spatialData.width, spatialData.height, 'TOILET', compassOffset);
-          if (toiletAnalysis.isGoodPlacement) overallScore += 5; else overallScore -= 10;
+      
+      // 3. Toilets
+      if (spatialData.toilets && spatialData.toilets.length > 0) {
+          spatialData.toilets.forEach((t, i) => {
+             const tAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, t, spatialData.width, spatialData.height, 'TOILET', `WC ${i + 1}`, compassOffset);
+             toiletAnalyses.push(tAnalysis);
+             if (tAnalysis.isGoodPlacement) overallScore += 5; else overallScore -= 10; // Penalize heavy for bad WC placement
+          });
       }
+
+      // 4. Bedrooms
+      if (spatialData.bedrooms && spatialData.bedrooms.length > 0) {
+          spatialData.bedrooms.forEach((b, i) => {
+              const bFacing = spatialData.bedroomFacings ? spatialData.bedroomFacings[i] : undefined;
+              const bAnalysis = analyzeFeature(
+                  kua, facingDegree, spatialData.center, b, spatialData.width, spatialData.height, 'BEDROOM', `Phòng Ngủ ${i + 1}`, compassOffset, 
+                  { toilets: spatialData.toilets, kitchen: spatialData.kitchen, featureFacing: bFacing }
+              );
+              bedroomAnalyses.push(bAnalysis);
+              if (bAnalysis.isGoodPlacement) overallScore += 10; else overallScore -= 5;
+          });
+      }
+
+      // 5. Altar
+      if (spatialData.altar && spatialData.altarFacing !== undefined) {
+          altarAnalysis = analyzeAltar(
+              kua, facingDegree, spatialData.center, spatialData.altar, spatialData.altarFacing, spatialData.width, spatialData.height, compassOffset, spatialData.toilets
+          );
+           if (altarAnalysis.score > 50) overallScore += 15; else overallScore -= 15;
+      }
+
+      // 6. Stairs
       if (spatialData.stairs) {
-          stairsAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, spatialData.stairs, spatialData.width, spatialData.height, 'STAIRS', compassOffset);
+          stairsAnalysis = analyzeFeature(kua, facingDegree, spatialData.center, spatialData.stairs, spatialData.width, spatialData.height, 'STAIRS', '', compassOffset, { door: spatialData.mainDoor, featureFacing: spatialData.stairsFacing });
           if (stairsAnalysis.isGoodPlacement) overallScore += 5; else overallScore -= 5;
       }
   }
@@ -337,7 +543,9 @@ export const analyzeFengShui = (
     sectors,
     kitchen: kitchenAnalysis,
     mainDoor: mainDoorAnalysis,
-    toilet: toiletAnalysis,
+    toilets: toiletAnalyses.length > 0 ? toiletAnalyses : undefined,
+    bedrooms: bedroomAnalyses.length > 0 ? bedroomAnalyses : undefined, 
+    altar: altarAnalysis, 
     stairs: stairsAnalysis,
     overallScore: Math.min(100, Math.max(0, overallScore)),
     advice

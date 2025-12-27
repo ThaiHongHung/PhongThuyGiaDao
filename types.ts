@@ -72,9 +72,15 @@ export interface HouseInfo {
   centerPoint?: Point; // Percentage 0-1
   kitchenPoint?: Point; // Percentage 0-1
   doorPoint?: Point;
-  toiletPoint?: Point;
+  toiletPoints?: Point[]; 
+  wcDoorPoints?: Point[]; // New: Toilet Doors for facing checks
+  bedroomPoints?: Point[]; 
+  bedroomFacings?: number[]; 
+  altarPoint?: Point; 
   stairsPoint?: Point;
-  stoveFacingDegree?: number; // Direction the stove faces
+  stoveFacingDegree?: number; 
+  altarFacingDegree?: number; 
+  stairsFacingDegree?: number; 
 }
 
 // Analysis Result Data Structure
@@ -101,8 +107,11 @@ export interface FeatureAnalysis {
   };
   score: number;
   advice: string[];
-  isGoodPlacement: boolean; // True if placed correctly according to rules (e.g. Toilet in Bad sector is True)
+  isGoodPlacement: boolean; 
 }
+
+// Specific analysis for Altar (Tọa Cát Hướng Cát)
+export interface AltarAnalysis extends KitchenAnalysis {} 
 
 export interface FengShuiAnalysis {
   menhQuai: {
@@ -125,7 +134,9 @@ export interface FengShuiAnalysis {
   }>;
   kitchen?: KitchenAnalysis;
   mainDoor?: FeatureAnalysis;
-  toilet?: FeatureAnalysis;
+  toilets?: FeatureAnalysis[];
+  bedrooms?: FeatureAnalysis[]; // New
+  altar?: AltarAnalysis; // New
   stairs?: FeatureAnalysis;
   overallScore: number;
   advice: string[];
