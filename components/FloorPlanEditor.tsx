@@ -12,7 +12,7 @@ interface FloorPlanEditorProps {
       stoveFacing: number, 
       door?: Point, 
       toilets?: Point[], 
-      wcDoors?: Point[], // New
+      wcDoors?: Point[], 
       bedrooms?: Point[], 
       bedroomFacings?: number[], 
       altar?: Point,
@@ -24,7 +24,6 @@ interface FloorPlanEditorProps {
   onImageChange: (file: File) => void;
 }
 
-// Trigram mapping corresponding to DIRECTIONS_ORDER [N, NE, E, SE, S, SW, W, NW]
 const TRIGRAMS = [
   { name: "Khảm", sub: "Bắc" },
   { name: "Cấn", sub: "Đ.Bắc" },
@@ -38,6 +37,13 @@ const TRIGRAMS = [
 
 type EditorMode = 'CENTER' | 'KITCHEN' | 'DOOR' | 'TOILET' | 'WC_DOOR' | 'STAIRS' | 'BEDROOM' | 'ALTAR';
 
+// Type for the item being deleted
+type DeleteTarget = {
+    type: EditorMode;
+    index?: number; // For arrays like toilets/bedrooms
+    name: string;
+} | null;
+
 const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, facingDegree, onUpdateAnalysis, onImageChange }) => {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   
@@ -46,7 +52,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
   const [kitchenPct, setKitchenPct] = useState<Point | undefined>(undefined);
   const [doorPct, setDoorPct] = useState<Point | undefined>(undefined);
   const [toiletsPct, setToiletsPct] = useState<Point[]>([]);
-  const [wcDoorsPct, setWcDoorsPct] = useState<Point[]>([]); // New state for WC Doors
+  const [wcDoorsPct, setWcDoorsPct] = useState<Point[]>([]); 
   const [bedroomsPct, setBedroomsPct] = useState<Point[]>([]); 
   const [bedroomFacings, setBedroomFacings] = useState<number[]>([]); 
   const [altarPct, setAltarPct] = useState<Point | undefined>(undefined);
@@ -63,6 +69,9 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
   
   const [mode, setMode] = useState<EditorMode>('CENTER');
   
+  // Deletion State
+  const [pendingDelete, setPendingDelete] = useState<DeleteTarget>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -74,11 +83,10 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     }
   }, [imageFile]);
 
-  // Propagate changes to parent for re-analysis
+  // Propagate changes
   useEffect(() => {
      if (centerPct) {
          const totalRotation = compassOffset + imageRotation;
-         
          onUpdateAnalysis({
              center: centerPct, 
              kitchen: kitchenPct, 
@@ -100,7 +108,6 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
   const handleLocalFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           onImageChange(e.target.files[0]);
-          // Reset array points
           setToiletsPct([]);
           setWcDoorsPct([]);
           setBedroomsPct([]);
@@ -122,22 +129,57 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
       setBedroomFacings(newFacings);
   };
 
-  // --- Coordinate Transformation Helpers ---
+  const confirmDelete = () => {
+      if (!pendingDelete) return;
+      const { type, index } = pendingDelete;
+
+      switch (type) {
+          case 'KITCHEN': setKitchenPct(undefined); break;
+          case 'DOOR': setDoorPct(undefined); break;
+          case 'ALTAR': setAltarPct(undefined); break;
+          case 'STAIRS': setStairsPct(undefined); break;
+          case 'CENTER': setCenterPct(undefined); break;
+          case 'TOILET': 
+              if (index !== undefined) setToiletsPct(prev => prev.filter((_, i) => i !== index));
+              break;
+          case 'WC_DOOR':
+              if (index !== undefined) setWcDoorsPct(prev => prev.filter((_, i) => i !== index));
+              break;
+          case 'BEDROOM':
+              if (index !== undefined) {
+                  setBedroomsPct(prev => prev.filter((_, i) => i !== index));
+                  setBedroomFacings(prev => prev.filter((_, i) => i !== index));
+              }
+              break;
+      }
+      setPendingDelete(null);
+  };
 
   const rotatePoint = (x: number, y: number, deg: number) => {
     const rad = deg * Math.PI / 180;
     const cx = 0.5, cy = 0.5;
     const dx = x - cx;
     const dy = y - cy;
-    
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
-    
     return {
         x: dx * cos - dy * sin + cx,
-        y: dx * sin + dy * cos + cy
+        y: dx * sin + dy * cos + cy,
+        cos,
+        sin
     };
   };
+  // Simplified rotate helper for logic
+  const simpleRotate = (x: number, y: number, deg: number) => {
+    const rad = deg * Math.PI / 180;
+    const cx = 0.5, cy = 0.5;
+    const dx = x - cx;
+    const dy = y - cy;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return { x: dx * cos - dy * sin + cx, y: dx * sin + dy * cos + cy };
+  }
+
 
   const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
@@ -155,7 +197,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     const visualX = adjustedX / rect.width;
     const visualY = adjustedY / rect.height;
 
-    const logicalPoint = rotatePoint(visualX, visualY, -imageRotation);
+    const logicalPoint = simpleRotate(visualX, visualY, -imageRotation);
 
     if (mode === 'CENTER') setCenterPct(logicalPoint);
     else if (mode === 'KITCHEN') setKitchenPct(logicalPoint);
@@ -164,14 +206,14 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     else if (mode === 'WC_DOOR') setWcDoorsPct(prev => [...prev, logicalPoint]);
     else if (mode === 'BEDROOM') {
         setBedroomsPct(prev => [...prev, logicalPoint]);
-        setBedroomFacings(prev => [...prev, 0]); // Default 0 facing for new bed
+        setBedroomFacings(prev => [...prev, 0]); 
     }
     else if (mode === 'ALTAR') setAltarPct(logicalPoint);
     else if (mode === 'STAIRS') setStairsPct(logicalPoint);
   };
 
   const getScreenCoords = (p: Point, rect: DOMRect) => {
-    const rotated = rotatePoint(p.x, p.y, imageRotation);
+    const rotated = simpleRotate(p.x, p.y, imageRotation);
     const dx = (rotated.x - 0.5) * rect.width;
     const dy = (rotated.y - 0.5) * rect.height;
     return {
@@ -202,24 +244,20 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     const g = svg.append("g").attr("transform", `translate(${cx}, ${cy})`);
     const rotation = -22.5 + compassOffset + imageRotation;
 
-    // Outer Ring (Arcs)
+    // ... (Drawing arcs and lines logic remains same) ...
     const arcOuter = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(innerRingRadius).outerRadius(radius);
     g.selectAll("path.outer").data(pie(data)).enter().append("path")
       .attr("d", arcOuter)
       .attr("fill", d => d.data.star.good ? "#ef4444" : "#475569") 
-      .attr("stroke", "none") // Removed stroke here, will add explicit lines later
+      .attr("stroke", "none") 
       .attr("transform", `rotate(${rotation})`).attr("opacity", 0.45);
 
-    // Inner Ring
     const arcInner = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(40).outerRadius(innerRingRadius);
     g.selectAll("path.inner").data(pie(data)).enter().append("path")
       .attr("d", arcInner)
       .attr("fill", "#64748b").attr("stroke", "#fff").attr("stroke-width", 1)
       .attr("transform", `rotate(${rotation})`).attr("opacity", 0.6);
 
-    // Divider Lines (The Angles)
-    // We draw lines at 0, 45, 90... inside the rotated group. 
-    // Since the group is rotated by -22.5 (plus offsets), the line at 0 aligns with the start of the North sector boundary.
     const angles = data.map((_, i) => i * 45);
     g.selectAll("line.divider").data(angles).enter().append("line")
        .attr("x1", 0).attr("y1", 0)
@@ -228,10 +266,8 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
        .attr("stroke-width", 1.5)
        .attr("transform", d => `rotate(${d + rotation})`);
 
-    // Labels
     const textGroup = g.append("g").attr("transform", `rotate(${rotation})`);
     
-    // Star Names
     const labelArcOuter = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(innerRingRadius).outerRadius(radius);
     textGroup.selectAll("text.star").data(pie(data)).enter().append("text")
       .attr("transform", d => `translate(${labelArcOuter.centroid(d)}) rotate(${-rotation})`)
@@ -241,7 +277,6 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
       .style("fill", d => d.data.star.good ? "#b91c1c" : "#1e293b")
       .style("stroke", "white").style("stroke-width", "3px").style("paint-order", "stroke");
 
-    // Trigrams
     const labelArcInner = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(40).outerRadius(innerRingRadius);
     textGroup.selectAll("text.trigram").data(pie(data)).enter().append("text")
         .attr("transform", d => `translate(${labelArcInner.centroid(d)}) rotate(${-rotation})`)
@@ -253,64 +288,101 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
             el.append("tspan").text(trigram.sub).attr("x", 0).attr("dy", "1.2em").style("font-size", "9px").style("fill", "white");
         });
 
-    // Degree Labels (0°, 45°, 90°...)
-    // Placed at the outer edge, in the middle of each sector.
-    // North (Index 0) is 0°.
     const labelArcDegrees = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(radius - 12).outerRadius(radius - 12);
     textGroup.selectAll("text.degree").data(pie(data)).enter().append("text")
         .attr("transform", d => `translate(${labelArcDegrees.centroid(d)}) rotate(${-rotation})`)
         .attr("text-anchor", "middle").attr("dy", "0.35em")
-        .text((_, i) => `${i * 45}°`) // 0, 45, 90...
+        .text((_, i) => `${i * 45}°`)
         .style("font-size", "9px").style("font-weight", "bold")
         .style("fill", "rgba(255,255,255,0.9)")
         .style("text-shadow", "0px 0px 2px #000");
 
 
-    // --- Markers ---
-    const drawMarker = (pct: Point, label: string, color: string, icon: string) => {
+    // --- Markers Logic with Long Press ---
+    let longPressTimer: ReturnType<typeof setTimeout>;
+
+    const startLongPress = (type: EditorMode, name: string, index?: number) => {
+        longPressTimer = setTimeout(() => {
+            setPendingDelete({ type, name, index });
+        }, 800); // 800ms to trigger delete
+    };
+
+    const cancelLongPress = () => {
+        clearTimeout(longPressTimer);
+    };
+
+    const drawMarker = (pct: Point, label: string, color: string, icon: string, type: EditorMode, index?: number) => {
         const visual = getScreenCoords(pct, rect);
-        const grp = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`);
-        grp.append("circle").attr("r", 14).attr("fill", color).attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))");
-        grp.append("text").text(icon).attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px");
-        grp.append("text").text(label).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)");
+        const grp = svg.append("g")
+            .attr("transform", `translate(${visual.x}, ${visual.y})`)
+            .style("cursor", "pointer");
+
+        // Add Hit Area (invisible circle) for easier touch
+        grp.append("circle")
+            .attr("r", 25)
+            .attr("fill", "transparent")
+            .on("mousedown", (e) => { e.stopPropagation(); startLongPress(type, label, index); })
+            .on("touchstart", (e) => { e.stopPropagation(); startLongPress(type, label, index); })
+            .on("mouseup", cancelLongPress)
+            .on("mouseleave", cancelLongPress)
+            .on("touchend", cancelLongPress);
+
+        grp.append("circle").attr("r", 14).attr("fill", color).attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))")
+           .attr("pointer-events", "none"); // Let events pass to hit area
+        
+        grp.append("text").text(icon).attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+        
+        grp.append("text").text(label).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)")
+           .attr("pointer-events", "none");
+           
         return grp;
     };
 
-    if (doorPct) drawMarker(doorPct, "Cửa Chính", "#0ea5e9", "🚪"); // Sky Blue
+    if (doorPct) drawMarker(doorPct, "Cửa Chính", "#0ea5e9", "🚪", 'DOOR'); 
     
-    // Draw Stairs
     if (stairsPct) {
         const visual = getScreenCoords(stairsPct, rect);
-        const sGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`);
+        const sGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
         
-        sGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#8b5cf6").attr("stroke", "white").attr("stroke-width", 2);
-        sGroup.append("text").text("🪜").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px");
-        sGroup.append("text").text("Thang").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)");
+        // Hit area for stairs
+        sGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
+            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('STAIRS', 'Cầu Thang'); })
+            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('STAIRS', 'Cầu Thang'); })
+            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
+
+        sGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#8b5cf6").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
+        sGroup.append("text").text("🪜").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+        sGroup.append("text").text("Thang").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
         
         if (stairsFacing !== undefined) {
              const visualStairsDeg = rotation + 22.5 + stairsFacing;
              const rad = (visualStairsDeg - 90) * (Math.PI / 180);
-             sGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#8b5cf6").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-purple)");
+             sGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#8b5cf6").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-purple)").attr("pointer-events", "none");
         }
     }
     
-    if (toiletsPct.length > 0) toiletsPct.forEach((tp, i) => drawMarker(tp, `WC ${i + 1}`, "#64748b", "🚽"));
-
-    if (wcDoorsPct.length > 0) wcDoorsPct.forEach((wd, i) => drawMarker(wd, `Cửa WC ${i + 1}`, "#94a3b8", "🚪"));
+    if (toiletsPct.length > 0) toiletsPct.forEach((tp, i) => drawMarker(tp, `WC ${i + 1}`, "#64748b", "🚽", 'TOILET', i));
+    if (wcDoorsPct.length > 0) wcDoorsPct.forEach((wd, i) => drawMarker(wd, `Cửa WC ${i + 1}`, "#94a3b8", "🚪", 'WC_DOOR', i));
     
     // Bedrooms
     if (bedroomsPct.length > 0) {
         bedroomsPct.forEach((bp, i) => {
             const visual = getScreenCoords(bp, rect);
-            const bGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`);
-            bGroup.append("circle").attr("r", 14).attr("fill", "#ec4899").attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))");
-            bGroup.append("text").text("🛏️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px");
-            bGroup.append("text").text(`Ngủ ${i+1}`).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)");
+            const bGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
+            
+            bGroup.append("circle").attr("r", 25).attr("fill", "transparent")
+                .on("mousedown", (e) => { e.stopPropagation(); startLongPress('BEDROOM', `Phòng Ngủ ${i+1}`, i); })
+                .on("touchstart", (e) => { e.stopPropagation(); startLongPress('BEDROOM', `Phòng Ngủ ${i+1}`, i); })
+                .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
+
+            bGroup.append("circle").attr("r", 14).attr("fill", "#ec4899").attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))").attr("pointer-events", "none");
+            bGroup.append("text").text("🛏️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+            bGroup.append("text").text(`Ngủ ${i+1}`).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
             
             if (bedroomFacings[i] !== undefined) {
                  const visualBedDeg = rotation + 22.5 + bedroomFacings[i];
                  const rad = (visualBedDeg - 90) * (Math.PI / 180);
-                 bGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#ec4899").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-pink)");
+                 bGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#ec4899").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-pink)").attr("pointer-events", "none");
             }
         });
     }
@@ -318,30 +390,42 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     // Kitchen
     if (kitchenPct) {
         const visual = getScreenCoords(kitchenPct, rect);
-        const kGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`);
-        kGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#f97316").attr("stroke", "white").attr("stroke-width", 2);
-        kGroup.append("text").text("🔥").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px");
-        kGroup.append("text").text("Bếp").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)");
+        const kGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
+        
+        kGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
+            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('KITCHEN', 'Bếp'); })
+            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('KITCHEN', 'Bếp'); })
+            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
+            
+        kGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#f97316").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
+        kGroup.append("text").text("🔥").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+        kGroup.append("text").text("Bếp").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
         
         if (stoveFacing !== undefined) {
              const visualStoveDeg = rotation + 22.5 + stoveFacing;
              const rad = (visualStoveDeg - 90) * (Math.PI / 180);
-             kGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#f97316").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead)");
+             kGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#f97316").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead)").attr("pointer-events", "none");
         }
     }
 
     // Altar
     if (altarPct) {
         const visual = getScreenCoords(altarPct, rect);
-        const aGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`);
-        aGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#eab308").attr("stroke", "white").attr("stroke-width", 2);
-        aGroup.append("text").text("🕯️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px");
-        aGroup.append("text").text("Thờ").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)");
+        const aGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
+        
+        aGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
+            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('ALTAR', 'Ban Thờ'); })
+            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('ALTAR', 'Ban Thờ'); })
+            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
+            
+        aGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#eab308").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
+        aGroup.append("text").text("🕯️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+        aGroup.append("text").text("Thờ").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
 
         if (altarFacing !== undefined) {
              const visualAltarDeg = rotation + 22.5 + altarFacing;
              const rad = (visualAltarDeg - 90) * (Math.PI / 180);
-             aGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#eab308").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-yellow)");
+             aGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#eab308").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-yellow)").attr("pointer-events", "none");
         }
     }
     
@@ -361,7 +445,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
   if (!imageUrl) return <div className="p-10 border-2 border-dashed border-slate-300 text-center text-slate-500 rounded-2xl">Vui lòng tải ảnh lên ở bước trước</div>;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 relative">
         {/* Toolbar */}
         <div className="flex flex-col gap-3 bg-white p-4 rounded-3xl border border-slate-200 shadow-sm">
             {/* Top Row: Modes */}
@@ -430,7 +514,6 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
 
                 {/* Toilet Button Group */}
                 <div className="flex items-center gap-0">
-                     {/* 1. Toilet Seat/Location */}
                      <button 
                         onClick={() => setMode('TOILET')} 
                         className={`h-9 px-3 rounded-l-lg text-xs font-bold flex items-center gap-1 transition-all whitespace-nowrap shadow-sm border border-r-0 ${mode === 'TOILET' ? 'bg-slate-600 border-slate-600 text-white' : 'bg-slate-50 border-slate-100 text-slate-600 hover:bg-white'}`}
@@ -442,7 +525,6 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
                         WC ({toiletsPct.length})
                     </button>
                     
-                    {/* 2. WC Door (New) */}
                     <button 
                         onClick={() => setMode('WC_DOOR')} 
                         className={`h-9 px-3 text-xs font-bold flex items-center gap-1 transition-all whitespace-nowrap shadow-sm border ${mode === 'WC_DOOR' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-50 border-slate-100 text-slate-600 hover:bg-white'}`}
@@ -476,7 +558,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
                     Thang
                 </button>
             </div>
-
+            {/* ... rest of the toolbar ... */}
             <div className="h-px bg-slate-100 w-full my-2"></div>
 
             {/* Middle Row: Rotation & Zoom */}
@@ -494,7 +576,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
                     <input type="range" min="0.5" max="3" step="0.1" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-sky-500"/>
                 </div>
             </div>
-
+            
             {/* Bottom Row: Item Directions */}
             <div className="pt-3 border-t border-slate-100 space-y-4 mt-1">
                 {/* 1. Main Features Row */}
@@ -564,13 +646,32 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
         </div>
         
         <div className="flex flex-col md:flex-row justify-between items-center gap-3 pt-2">
-            <p className="text-xs text-slate-400 italic text-center md:text-left">Chọn công cụ và click vào bản vẽ để xác định vị trí.</p>
+            <p className="text-xs text-slate-400 italic text-center md:text-left">Click để đặt. <span className="font-bold text-slate-600">Giữ lì vào icon để xóa.</span></p>
             <label className="cursor-pointer px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold border border-slate-200 shadow-sm transition-all flex items-center gap-2 whitespace-nowrap group">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400 group-hover:text-teal-600 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                 Thay ảnh mặt bằng
                 <input type="file" accept="image/*" onChange={handleLocalFileChange} className="hidden" />
             </label>
         </div>
+
+        {/* Delete Confirmation Modal */}
+        {pendingDelete && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm rounded-3xl">
+                <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-xs w-full animate-bounce-in">
+                    <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                        </svg>
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-800 text-center mb-2">Xóa đối tượng?</h3>
+                    <p className="text-sm text-slate-500 text-center mb-6">Bạn có chắc chắn muốn xóa <span className="font-bold text-slate-700">{pendingDelete.name}</span> này không?</p>
+                    <div className="flex gap-3">
+                        <button onClick={() => setPendingDelete(null)} className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">Hủy bỏ</button>
+                        <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl font-bold text-white bg-rose-600 hover:bg-rose-700 transition-colors shadow-lg shadow-rose-200">Xóa</button>
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
   );
 };
