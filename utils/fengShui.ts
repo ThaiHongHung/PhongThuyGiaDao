@@ -127,7 +127,8 @@ export const analyzeKitchen = (
   imgH: number,
   compassOffset: number,
   toilets: Point[] = [],
-  wcDoors: Point[] = []
+  wcDoors: Point[] = [],
+  mainDoor: Point | undefined = undefined
 ): KitchenAnalysis => {
   const locationDegree = calculateBearing(center, kitchen, houseFacing, imgW, imgH, compassOffset);
   const locSector = getSectorByDegree(locationDegree, kua);
@@ -187,6 +188,17 @@ export const analyzeKitchen = (
           advice.push("🚫 THỦY HỎA XUNG: Hướng miệng bếp chiếu thẳng vào Cửa WC.");
           advice.push("Tác hại: Uế khí từ WC xộc thẳng vào bếp. Gây bệnh đường tiêu hóa, hao tài tốn của.");
           advice.push("👉 Hóa giải: Luôn đóng cửa WC, treo rèm hạt gỗ, hoặc đổi hướng bếp.");
+      }
+  }
+
+  // 5. Check Kitchen facing Main Door (Khai Môn Kiến Táo)
+  if (mainDoor) {
+      // Check if stove facing points to main door (Tolerance 25 degrees)
+      if (isFacingTarget(kitchen, stoveFacing, mainDoor, compassOffset, 25)) {
+          score -= 40;
+          advice.push("🚫 ĐẠI KỴ: Hướng bếp quay thẳng ra Cửa Chính.");
+          advice.push("Giải thích: 'Khai môn kiến táo, tài phú đa hao'. Hỏa khí xung khắc với khí từ cửa chính. Tiền tài đội nón ra đi, gia đạo bất hòa.");
+          advice.push("👉 Hóa giải: Cần che chắn gấp. Sử dụng bình phong, tủ kệ hoặc vách ngăn giữa bếp và cửa chính.");
       }
   }
 
@@ -335,12 +347,15 @@ export const analyzeFeature = (
 
         // GEOMETRIC CHECK: Stairs facing Main Door
         if (spatialContext.door && spatialContext.featureFacing !== undefined) {
-            // Widen tolerance to 35 degrees to ensure detecting "Lao Cầu Thang" more reliably
-            if (isFacingTarget(target, spatialContext.featureFacing, spatialContext.door, compassOffset, 35)) {
-                score -= 40;
-                advice.push("🚫 ĐẠI KỴ: Cầu thang đối diện cửa chính (Lao Cầu Thang)."); 
-                advice.push("Giải thích: Khí nạp vào từ cửa chính bị cầu thang cắt đứt hoặc xộc thẳng ra ngoài. Gây thoái tài, gia đạo bất an.");
-                advice.push("👉 Hóa giải: Đặt bình phong, rèm châu hoặc chậu cây lớn ở chân cầu thang để cản khí.");
+            // Check if Stairs point to Door
+            // Widen tolerance to 45 degrees to ensure detecting "Lao Cầu Thang" more reliably
+            const isFacing = isFacingTarget(target, spatialContext.featureFacing, spatialContext.door, compassOffset, 45);
+            
+            if (isFacing) {
+                score -= 50;
+                advice.push("🚫 ĐẠI KỴ: Cầu thang đối diện thẳng Cửa Chính (Lao Cầu Thang)."); 
+                advice.push("Hiểm họa: 'Cửa mở thấy thang, tiền tài đi mất'. Sinh khí vừa vào cửa đã bị cầu thang dẫn tuột ra ngoài. Gây hao tài tốn của, nhân đinh suy bại.");
+                advice.push("👉 Hóa giải: Bắt buộc phải che chắn. Đặt bình phong, tủ kệ hoặc vách ngăn CNC giữa chân cầu thang và cửa. Treo rèm hạt gỗ hoặc quả cầu thủy tinh.");
             }
         }
         advice.push("🔢 Số bậc cầu thang nên rơi vào cung 'Sinh' (công thức 4n+1): 17, 21, 25 bậc.");
@@ -370,18 +385,41 @@ export const analyzeFeature = (
         }
         
         // 3. Interactions
+        // 3.1 WC Proximity (Noise, Yin energy)
         if (spatialContext.toilets && spatialContext.toilets.length > 0) {
+            let tooClose = false;
             spatialContext.toilets.forEach(wc => {
-                if (getDistance(target, wc) < 0.12) {
-                    score -= 20;
-                    advice.push("🚫 CẢNH BÁO: Đầu giường quá sát tường WC. Âm khí và tiếng ồn nước chảy gây bệnh thần kinh, đau đầu.");
-                }
+                if (getDistance(target, wc) < 0.12) tooClose = true;
             });
+            if (tooClose) {
+                score -= 30;
+                advice.push("🚫 ĐẠI KỴ: Đầu giường tựa vào nhà vệ sinh. Vi khuẩn, uế khí và tiếng ồn ảnh hưởng xấu đến sức khỏe, giấc ngủ và tài lộc.");
+                advice.push("👉 Di chuyển: Cách tốt nhất là dời giường sang vị trí khác.");
+                advice.push("👉 Đóng kín cửa: Luôn đóng kín cửa nhà vệ sinh (đặc biệt cửa phòng tắm) để hạn chế mùi và âm thanh.");
+                advice.push("👉 Tăng cường thông gió: Lắp quạt thông gió, mở cửa sổ phòng tắm thường xuyên.");
+                advice.push("👉 Vật phẩm phong thủy: Treo tranh núi non, cây cối (không nhọn) để cân bằng năng lượng, dùng đèn/tinh dầu dịu nhẹ.");
+            }
         }
-        
-        if (spatialContext.kitchen && getDistance(target, spatialContext.kitchen) < 0.15) {
-             advice.push("⚠️ Cẩn thận: Phòng ngủ sát bếp hoặc trên bếp. Hỏa khí gây nóng nảy, vợ chồng lục đục.");
+
+        // 3.2 WC Door Facing (Bed facing WC door)
+        if (spatialContext.wcDoors && spatialContext.wcDoors.length > 0 && spatialContext.featureFacing !== undefined) {
+            let facingWC = false;
+             spatialContext.wcDoors.forEach(wcDoor => {
+                 // Check if bed is facing this WC door
+                 // Tolerance 20 deg
+                 if (isFacingTarget(target, spatialContext.featureFacing!, wcDoor, compassOffset, 20)) {
+                     facingWC = true;
+                 }
+             });
+             if (facingWC) {
+                 score -= 30;
+                 advice.push("🚫 ĐẠI KỴ: Đầu giường hoặc chân giường đối diện thẳng cửa WC. Uế khí xộc thẳng vào người ngủ.");
+                 advice.push("👉 Hóa giải: Đóng cửa WC thường xuyên, đặt bình phong che chắn.");
+             }
         }
+
+        // 3.4 Beams (Static advice)
+        advice.push("💡 Lưu ý quan trọng: Tránh xà ngang (dầm nhà) chạy qua đầu giường (Xà Ngang Ép Đỉnh). Gây áp lực tâm lý, mất ngủ.");
     }
 
     let featureNameStr = '';
@@ -470,7 +508,7 @@ export const analyzeFengShui = (
       // 1. Kitchen
       if (spatialData.kitchen && spatialData.stoveFacing !== undefined) {
           kitchenAnalysis = analyzeKitchen(
-              kua, facingDegree, spatialData.center, spatialData.kitchen, spatialData.stoveFacing, spatialData.width, spatialData.height, compassOffset, spatialData.toilets, spatialData.wcDoors
+              kua, facingDegree, spatialData.center, spatialData.kitchen, spatialData.stoveFacing, spatialData.width, spatialData.height, compassOffset, spatialData.toilets, spatialData.wcDoors, spatialData.mainDoor
           );
           if (kitchenAnalysis.score > 50) overallScore += 10; else overallScore -= 10;
       }
@@ -496,7 +534,12 @@ export const analyzeFengShui = (
               const bFacing = spatialData.bedroomFacings ? spatialData.bedroomFacings[i] : undefined;
               const bAnalysis = analyzeFeature(
                   kua, facingDegree, spatialData.center, b, spatialData.width, spatialData.height, 'BEDROOM', `Phòng Ngủ ${i + 1}`, compassOffset, 
-                  { toilets: spatialData.toilets, kitchen: spatialData.kitchen, featureFacing: bFacing }
+                  { 
+                      toilets: spatialData.toilets, 
+                      wcDoors: spatialData.wcDoors, // Pass WC Doors for checking if bed faces WC
+                      kitchen: spatialData.kitchen, 
+                      featureFacing: bFacing 
+                  }
               );
               bedroomAnalyses.push(bAnalysis);
               if (bAnalysis.isGoodPlacement) overallScore += 10; else overallScore -= 5;
