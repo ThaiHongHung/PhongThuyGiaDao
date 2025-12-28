@@ -16,7 +16,7 @@ interface FloorPlanEditorProps {
       bedrooms?: Point[], 
       bedroomFacings?: number[], 
       altar?: Point,
-      altarFacing: number,
+      altarFacing: number, 
       stairs?: Point, 
       stairsFacing: number, 
       compassOffset: number 
@@ -34,6 +34,22 @@ const TRIGRAMS = [
   { name: "Đoài", sub: "Tây" },
   { name: "Càn", sub: "T.Bắc" }
 ];
+
+// --- MODERN OBJECT-ORIENTED SVG ICONS (ViewBox 0 0 24 24) ---
+const MARKER_ICONS = {
+    // Fire / Kitchen - Gas Stove Top View (KEEP)
+    FIRE: "M7 11a1 1 0 100 2 1 1 0 000-2zm10 0a1 1 0 100 2 1 1 0 000-2zm-5-3a1 1 0 100 2 1 1 0 000-2z M19 5H5a2 2 0 00-2 2v10a2 2 0 002 2h14a2 2 0 002-2V7a2 2 0 00-2-2z M5 7h14v10H5V7z",
+    // Bed - Top Down view with 2 pillows (KEEP)
+    BED: "M20 9.5V7c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v2.5C2.9 10 2 11.1 2 12.5v7h2.5v-2h15v2H22v-7c0-1.4-.9-2.5-2-3zM7 7h4v3H7V7zm6 0h4v3h-4V7z",
+    // Toilet - Toilet Bowl (KEEP)
+    TOILET: "M9 22h6v-2H9v2zm3-20C9.8 2 8 3.8 8 6v5h8V6c0-2.2-1.8-4-4-4zm-5 12c0 2.8 2.2 5 5 5s5-2.2 5-5H7z",
+    // Door - Simple Door Frame (KEEP)
+    DOOR: "M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2zm-2 0H7V5h10v14z M9 10h2v2H9v-2z",
+    // Stairs - Top down steps view (UPDATED)
+    STAIRS: "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H5v-3h14v3zm0-5H5V9h14v3zm0-5H5V5h14v2z",
+    // Altar - Traditional Altar Table (UPDATED)
+    ALTAR: "M21 8H3V6h18v2zM5 9h14v3H5V9zm2 3v8h2v-6h6v6h2v-8H7z"
+};
 
 type EditorMode = 'CENTER' | 'KITCHEN' | 'DOOR' | 'TOILET' | 'WC_DOOR' | 'STAIRS' | 'BEDROOM' | 'ALTAR';
 
@@ -155,21 +171,6 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
       setPendingDelete(null);
   };
 
-  const rotatePoint = (x: number, y: number, deg: number) => {
-    const rad = deg * Math.PI / 180;
-    const cx = 0.5, cy = 0.5;
-    const dx = x - cx;
-    const dy = y - cy;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-    return {
-        x: dx * cos - dy * sin + cx,
-        y: dx * sin + dy * cos + cy,
-        cos,
-        sin
-    };
-  };
-  // Simplified rotate helper for logic
   const simpleRotate = (x: number, y: number, deg: number) => {
     const rad = deg * Math.PI / 180;
     const cx = 0.5, cy = 0.5;
@@ -244,7 +245,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
     const g = svg.append("g").attr("transform", `translate(${cx}, ${cy})`);
     const rotation = -22.5 + compassOffset + imageRotation;
 
-    // ... (Drawing arcs and lines logic remains same) ...
+    // --- Draw Bagua Sectors (Background) ---
     const arcOuter = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(innerRingRadius).outerRadius(radius);
     g.selectAll("path.outer").data(pie(data)).enter().append("path")
       .attr("d", arcOuter)
@@ -268,6 +269,7 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
 
     const textGroup = g.append("g").attr("transform", `rotate(${rotation})`);
     
+    // Sector Labels
     const labelArcOuter = d3.arc<d3.PieArcDatum<typeof data[0]>>().innerRadius(innerRingRadius).outerRadius(radius);
     textGroup.selectAll("text.star").data(pie(data)).enter().append("text")
       .attr("transform", d => `translate(${labelArcOuter.centroid(d)}) rotate(${-rotation})`)
@@ -298,147 +300,107 @@ const FloorPlanEditor: React.FC<FloorPlanEditorProps> = ({ imageFile, analysis, 
         .style("text-shadow", "0px 0px 2px #000");
 
 
-    // --- Markers Logic with Long Press ---
+    // --- MODERN MARKER RENDERING ---
     let longPressTimer: ReturnType<typeof setTimeout>;
 
     const startLongPress = (type: EditorMode, name: string, index?: number) => {
         longPressTimer = setTimeout(() => {
             setPendingDelete({ type, name, index });
-        }, 800); // 800ms to trigger delete
+        }, 800);
     };
+    const cancelLongPress = () => clearTimeout(longPressTimer);
 
-    const cancelLongPress = () => {
-        clearTimeout(longPressTimer);
-    };
-
-    const drawMarker = (pct: Point, label: string, color: string, icon: string, type: EditorMode, index?: number) => {
+    // Modern Marker Drawer
+    const drawModernMarker = (
+        pct: Point, 
+        label: string, 
+        color: string, 
+        iconPath: string, 
+        type: EditorMode, 
+        index?: number,
+        facingAngle?: number
+    ) => {
         const visual = getScreenCoords(pct, rect);
         const grp = svg.append("g")
             .attr("transform", `translate(${visual.x}, ${visual.y})`)
             .style("cursor", "pointer");
 
-        // Add Hit Area (invisible circle) for easier touch
+        // 1. Invisible Hit Area (Larger)
         grp.append("circle")
-            .attr("r", 25)
+            .attr("r", 28)
             .attr("fill", "transparent")
             .on("mousedown", (e) => { e.stopPropagation(); startLongPress(type, label, index); })
             .on("touchstart", (e) => { e.stopPropagation(); startLongPress(type, label, index); })
-            .on("mouseup", cancelLongPress)
-            .on("mouseleave", cancelLongPress)
-            .on("touchend", cancelLongPress);
+            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
 
-        grp.append("circle").attr("r", 14).attr("fill", color).attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))")
-           .attr("pointer-events", "none"); // Let events pass to hit area
+        // 2. Direction Arrow (Behind the marker)
+        if (facingAngle !== undefined) {
+             const visualDeg = rotation + 22.5 + facingAngle;
+             // Large Triangle Arrow
+             const arrowGroup = grp.append("g").attr("transform", `rotate(${visualDeg})`);
+             arrowGroup.append("path")
+                .attr("d", "M-8,-24 L0,-38 L8,-24 Z") // Upward pointing triangle attached to top of circle radius approx
+                .attr("transform", "translate(0, -5)") // Push it out slightly
+                .attr("fill", color)
+                .attr("stroke", "white")
+                .attr("stroke-width", 1.5);
+        }
+
+        // 3. The Pin Body (Circle with thick white border)
+        // Background Circle
+        grp.append("circle")
+           .attr("r", 16)
+           .attr("fill", color)
+           .attr("stroke", "white")
+           .attr("stroke-width", 3)
+           .attr("filter", "drop-shadow(0px 3px 3px rgba(0,0,0,0.3))")
+           .attr("pointer-events", "none");
         
-        grp.append("text").text(icon).attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
+        // 4. The Icon (Centered, white)
+        // Icons are generally defined in a 24x24 box. Scale down to fit.
+        grp.append("path")
+           .attr("d", iconPath)
+           .attr("fill", "white")
+           .attr("transform", "translate(-12, -12) scale(0.75) translate(4, 4)") // Centering logic for 24px icon inside 16px radius
+           .attr("pointer-events", "none");
         
-        grp.append("text").text(label).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)")
+        // 5. Label (Below)
+        grp.append("text")
+           .text(label)
+           .attr("y", 28)
+           .attr("text-anchor", "middle")
+           .attr("fill", "white")
+           .style("font-size", "11px")
+           .style("font-weight", "800")
+           .style("text-shadow", "0px 1px 3px rgba(0,0,0,0.9), 0px 0px 2px " + color)
            .attr("pointer-events", "none");
            
         return grp;
     };
 
-    if (doorPct) drawMarker(doorPct, "Cửa Chính", "#0ea5e9", "🚪", 'DOOR'); 
+    // Draw Items
+    if (doorPct) drawModernMarker(doorPct, "Cửa", "#0ea5e9", MARKER_ICONS.DOOR, 'DOOR'); 
     
     if (stairsPct) {
-        const visual = getScreenCoords(stairsPct, rect);
-        const sGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
-        
-        // Hit area for stairs
-        sGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
-            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('STAIRS', 'Cầu Thang'); })
-            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('STAIRS', 'Cầu Thang'); })
-            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
-
-        sGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#8b5cf6").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
-        sGroup.append("text").text("🪜").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
-        sGroup.append("text").text("Thang").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
-        
-        if (stairsFacing !== undefined) {
-             const visualStairsDeg = rotation + 22.5 + stairsFacing;
-             const rad = (visualStairsDeg - 90) * (Math.PI / 180);
-             sGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#8b5cf6").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-purple)").attr("pointer-events", "none");
-        }
+        drawModernMarker(stairsPct, "Thang", "#8b5cf6", MARKER_ICONS.STAIRS, 'STAIRS', undefined, stairsFacing);
     }
     
-    if (toiletsPct.length > 0) toiletsPct.forEach((tp, i) => drawMarker(tp, `WC ${i + 1}`, "#64748b", "🚽", 'TOILET', i));
-    if (wcDoorsPct.length > 0) wcDoorsPct.forEach((wd, i) => drawMarker(wd, `Cửa WC ${i + 1}`, "#94a3b8", "🚪", 'WC_DOOR', i));
+    if (toiletsPct.length > 0) toiletsPct.forEach((tp, i) => drawModernMarker(tp, `WC${i + 1}`, "#64748b", MARKER_ICONS.TOILET, 'TOILET', i));
+    if (wcDoorsPct.length > 0) wcDoorsPct.forEach((wd, i) => drawModernMarker(wd, `CửaWC`, "#94a3b8", MARKER_ICONS.DOOR, 'WC_DOOR', i));
     
-    // Bedrooms
     if (bedroomsPct.length > 0) {
         bedroomsPct.forEach((bp, i) => {
-            const visual = getScreenCoords(bp, rect);
-            const bGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
-            
-            bGroup.append("circle").attr("r", 25).attr("fill", "transparent")
-                .on("mousedown", (e) => { e.stopPropagation(); startLongPress('BEDROOM', `Phòng Ngủ ${i+1}`, i); })
-                .on("touchstart", (e) => { e.stopPropagation(); startLongPress('BEDROOM', `Phòng Ngủ ${i+1}`, i); })
-                .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
-
-            bGroup.append("circle").attr("r", 14).attr("fill", "#ec4899").attr("stroke", "white").attr("stroke-width", 2).attr("filter", "drop-shadow(0px 2px 2px rgba(0,0,0,0.3))").attr("pointer-events", "none");
-            bGroup.append("text").text("🛏️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
-            bGroup.append("text").text(`Ngủ ${i+1}`).attr("y", 22).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
-            
-            if (bedroomFacings[i] !== undefined) {
-                 const visualBedDeg = rotation + 22.5 + bedroomFacings[i];
-                 const rad = (visualBedDeg - 90) * (Math.PI / 180);
-                 bGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#ec4899").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-pink)").attr("pointer-events", "none");
-            }
+            drawModernMarker(bp, `Ngủ ${i+1}`, "#ec4899", MARKER_ICONS.BED, 'BEDROOM', i, bedroomFacings[i]);
         });
     }
 
-    // Kitchen
     if (kitchenPct) {
-        const visual = getScreenCoords(kitchenPct, rect);
-        const kGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
-        
-        kGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
-            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('KITCHEN', 'Bếp'); })
-            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('KITCHEN', 'Bếp'); })
-            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
-            
-        kGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#f97316").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
-        kGroup.append("text").text("🔥").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
-        kGroup.append("text").text("Bếp").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
-        
-        if (stoveFacing !== undefined) {
-             const visualStoveDeg = rotation + 22.5 + stoveFacing;
-             const rad = (visualStoveDeg - 90) * (Math.PI / 180);
-             kGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#f97316").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead)").attr("pointer-events", "none");
-        }
+        drawModernMarker(kitchenPct, "Bếp", "#f97316", MARKER_ICONS.FIRE, 'KITCHEN', undefined, stoveFacing);
     }
 
-    // Altar
     if (altarPct) {
-        const visual = getScreenCoords(altarPct, rect);
-        const aGroup = svg.append("g").attr("transform", `translate(${visual.x}, ${visual.y})`).style("cursor", "pointer");
-        
-        aGroup.append("rect").attr("x", -20).attr("y", -20).attr("width", 40).attr("height", 40).attr("fill", "transparent")
-            .on("mousedown", (e) => { e.stopPropagation(); startLongPress('ALTAR', 'Ban Thờ'); })
-            .on("touchstart", (e) => { e.stopPropagation(); startLongPress('ALTAR', 'Ban Thờ'); })
-            .on("mouseup", cancelLongPress).on("mouseleave", cancelLongPress).on("touchend", cancelLongPress);
-            
-        aGroup.append("rect").attr("x", -12).attr("y", -12).attr("width", 24).attr("height", 24).attr("rx", 4).attr("fill", "#eab308").attr("stroke", "white").attr("stroke-width", 2).attr("pointer-events", "none");
-        aGroup.append("text").text("🕯️").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-size", "14px").attr("pointer-events", "none");
-        aGroup.append("text").text("Thờ").attr("y", 20).attr("text-anchor", "middle").attr("fill", "white").style("font-size", "10px").style("font-weight", "bold").style("text-shadow", "0px 1px 2px rgba(0,0,0,0.8)").attr("pointer-events", "none");
-
-        if (altarFacing !== undefined) {
-             const visualAltarDeg = rotation + 22.5 + altarFacing;
-             const rad = (visualAltarDeg - 90) * (Math.PI / 180);
-             aGroup.append("line").attr("x1", 0).attr("y1", 0).attr("x2", Math.cos(rad) * 30).attr("y2", Math.sin(rad) * 30).attr("stroke", "#eab308").attr("stroke-width", 3).attr("marker-end", "url(#arrowhead-yellow)").attr("pointer-events", "none");
-        }
+        drawModernMarker(altarPct, "Thờ", "#eab308", MARKER_ICONS.ALTAR, 'ALTAR', undefined, altarFacing);
     }
-    
-    // Defs
-    const defs = svg.append("defs");
-    const marker = (id: string, color: string) => 
-        defs.append("marker").attr("id", id).attr("viewBox", "0 -5 10 10").attr("refX", 8).attr("refY", 0).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
-        .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", color);
-    
-    marker("arrowhead", "#f97316");
-    marker("arrowhead-yellow", "#eab308");
-    marker("arrowhead-purple", "#8b5cf6");
-    marker("arrowhead-pink", "#ec4899");
 
   }, [centerPct, kitchenPct, doorPct, toiletsPct, wcDoorsPct, bedroomsPct, bedroomFacings, altarPct, altarFacing, stairsPct, stairsFacing, analysis, facingDegree, stoveFacing, imageRotation, compassOffset, zoom]);
 
